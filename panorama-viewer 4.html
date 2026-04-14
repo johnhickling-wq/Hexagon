@@ -61,7 +61,7 @@
 </style>
 </head>
 <body>
-<div class="overlay" id="startScreen"><h1>Better Day</h1><div class="subtitle">Collect hidden tiles and piece together a better world.<br>Long-press to collect · Swipe to explore · Long-press to place.</div><div class="mode-buttons"><button class="mode-btn selected" id="modeHexBtn" onclick="selectMode('hex')"><div class="mode-icon">△</div>Mosaic<div class="mode-label">Abstract triangles</div></button><button class="mode-btn" id="modeImgBtn" onclick="selectMode('image')"><div class="mode-icon">🌄</div>Image<div class="mode-label">Two panoramas</div></button></div><button class="play-btn" id="startBtn">Play</button></div>
+<div class="overlay" id="startScreen"><h1>Better Day</h1><div class="subtitle">Collect hidden tiles and piece together a better world.<br>Long-press to collect · Swipe to explore · Long-press to place.</div><button class="play-btn" id="startBtn">Play</button></div>
 <div class="overlay hidden" id="completeScreen"><h2>A Better Day!</h2><div class="score-display" id="finalScore">0</div><div class="stats" id="finalStats"></div><button class="play-btn" id="replayBtn">Play Again</button></div>
 <div class="hud" id="hud" style="display:none;"><div class="hud-top"><div class="hud-score" id="scoreDisplay">0</div><div class="hud-right"><div class="settings-btn" id="settingsBtn">⚙</div><div class="hud-timer" id="timerDisplay">0:00</div></div></div><div class="hud-progress"><div class="hud-progress-bar" id="progressBar"></div></div></div>
 <div class="carry-bar" id="carryBar"><div class="carry-text">Find where this belongs</div><button class="cancel-btn" id="cancelBtn">Cancel</button></div>
@@ -71,10 +71,11 @@
 <!-- Settings panel (hidden by default) -->
 <div class="settings-panel" id="settingsPanel">
   <div class="s-row"><span class="s-label">Tiles</span><input type="range" id="hexSlider" min="0" max="3" value="1" step="1"><span class="s-value" id="hexCount">40</span></div>
-  <div class="s-row" id="mosaicRow" style="display:none;"><span class="s-label">Detail</span><input type="range" id="mosaicSlider" min="2" max="200" value="98" step="1"><span class="s-value" id="mosaicVal">98</span></div>
+  <div class="s-row"><span class="s-label">Inside zoom</span><input type="range" id="insideZoomSlider" min="40" max="100" value="75" step="1"><span class="s-value" id="insideZoomVal">75</span></div>
+  <div class="s-row"><span class="s-label">Outside zoom</span><input type="range" id="outsideZoomSlider" min="500" max="1200" value="780" step="10"><span class="s-value" id="outsideZoomVal">780</span></div>
   <div class="s-row" style="gap:6px;flex-wrap:wrap;">
-    <button class="s-btn" id="uploadBadBtn" style="border-color:rgba(255,100,100,0.3)">Bad Day ▲</button>
-    <button class="s-btn" id="uploadGoodBtn" style="border-color:rgba(100,255,120,0.3)">Better Day ▲</button>
+    <button class="s-btn" id="uploadSimBtn" style="border-color:rgba(255,100,100,0.3)">Simulation ▲</button>
+    <button class="s-btn" id="uploadRealityBtn" style="border-color:rgba(100,255,120,0.3)">Reality ▲</button>
   </div>
   <div class="s-row" style="gap:6px;flex-wrap:wrap;">
     <button class="s-btn" id="edgeBtn">Edges</button>
@@ -82,7 +83,7 @@
     <button class="s-btn" id="viewBtn">Outside</button>
   </div>
 </div>
-<input type="file" id="fileBad" accept="image/*"><input type="file" id="fileGood" accept="image/*">
+<input type="file" id="fileSim" accept="image/*"><input type="file" id="fileReality" accept="image/*">
 <div class="flash correct" id="flashCorrect"></div><div class="flash wrong" id="flashWrong"></div>
 <div class="info-bar" id="infoBar"></div>
 
@@ -143,8 +144,8 @@ function loadEmbeddedTex(src,cb){
 }
 
 // Fallback canvas textures (used if images fail)
-function mkBadFallback(){const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');x.fillStyle='#1a1020';x.fillRect(0,0,512,256);x.fillStyle='#888';x.font='24px sans-serif';x.textAlign='center';x.fillText('Bad Day (no image)',256,128);const t=new THREE.CanvasTexture(c);t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;return t;}
-function mkGoodFallback(){const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');x.fillStyle='#205030';x.fillRect(0,0,512,256);x.fillStyle='#ccc';x.font='24px sans-serif';x.textAlign='center';x.fillText('Better Day (no image)',256,128);const t=new THREE.CanvasTexture(c);t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;return t;}
+function mkSimFallback(){const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');x.fillStyle='#1a1020';x.fillRect(0,0,512,256);x.fillStyle='#888';x.font='24px sans-serif';x.textAlign='center';x.fillText('Simulation (no image)',256,128);const t=new THREE.CanvasTexture(c);t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;return t;}
+function mkRealityFallback(){const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');x.fillStyle='#205030';x.fillRect(0,0,512,256);x.fillStyle='#ccc';x.font='24px sans-serif';x.textAlign='center';x.fillText('Reality (no image)',256,128);const t=new THREE.CanvasTexture(c);t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;return t;}
 
 // Black texture for pole tiles
 function mkPoleTex(label){
@@ -176,10 +177,13 @@ let score=0,moves=0,done=0,total=0,playable=0;
 let t0=0,elapsed=0,tInt=null;
 let hintCD=0,hintLvl=0,hintTarget=-1,hintCluster=null,hintTO=null;
 let edges=false,easy=true,viewInside=true;
-let gameMode='hex'; // 'hex' or 'image'
-let mosaicDensity=98; // triangles across the width of the mosaic texture
-let mosaicTex=null;
-let badTex=null,goodTex=null;
+let simTex=null,realityTex=null;
+// Initial zoom levels for the two views (user-adjustable via sliders).
+// Inside zoom is a camera FOV (degrees) — lower = zoomed in.
+// Outside zoom is the camera's distance from the sphere centre — lower = closer.
+let insideFOV=75;
+let outsideDist=780;
+const OUTSIDE_FOV=75; // fixed FOV when outside; distance drives the zoom feel
 let geoGrp=null,edgeGrp=null,hlGrp=null,fMeshes=[];
 let poleTop=-1,poleBot=-1; // indices of pole tiles
 
@@ -187,99 +191,6 @@ let poleTop=-1,poleBot=-1; // indices of pole tiles
 // 6. DERANGEMENT (only for playable tiles)
 // ═══════════════════════════════════════════
 function derange(n){if(n<2)return[0];let a;do{a=[...Array(n).keys()];for(let i=n-1;i>0;i--){const j=Math.floor(Math.random()*i);[a[i],a[j]]=[a[j],a[i]];};}while(a.some((v,i)=>v===i));return a;}
-
-// ═══════════════════════════════════════════
-// 6b. MODE SELECTION
-// ═══════════════════════════════════════════
-function selectMode(mode){
-  gameMode=mode;
-  document.getElementById('modeHexBtn').classList.toggle('selected',mode==='hex');
-  document.getElementById('modeImgBtn').classList.toggle('selected',mode==='image');
-}
-
-// ═══════════════════════════════════════════
-// 6c. MOSAIC TEXTURE GENERATOR
-// Takes the good-day image and renders it as
-// a grid of solid-colour triangles
-// ═══════════════════════════════════════════
-function generateMosaicTex(sourceTexture,density){
-  // Get the source image from the texture
-  const srcImg=sourceTexture.image;
-  if(!srcImg)return null;
-
-  // Sample canvas: draw source image to read pixel colours
-  const sC=document.createElement('canvas');
-  sC.width=srcImg.naturalWidth||srcImg.width;
-  sC.height=srcImg.naturalHeight||srcImg.height;
-  const sCtx=sC.getContext('2d');
-  sCtx.drawImage(srcImg,0,0,sC.width,sC.height);
-
-  // Output canvas: same dimensions as source
-  const w=sC.width,h=sC.height;
-  const oC=document.createElement('canvas');
-  oC.width=w;oC.height=h;
-  const ctx=oC.getContext('2d');
-
-  // Fill with dark background
-  ctx.fillStyle='#0a0a0a';
-  ctx.fillRect(0,0,w,h);
-
-  // Triangle geometry (equilateral triangles)
-  // density = number of triangles across the width
-  const triBase=w/density;
-  const triH=triBase*Math.sqrt(3)/2;
-  const rows=Math.ceil(h/triH)+1;
-
-  for(let row=0;row<rows;row++){
-    const y=row*triH;
-    // Each row has up-pointing and down-pointing triangles
-    const cols=density+2;
-    for(let col=-1;col<cols;col++){
-      // Up-pointing triangle: base at bottom
-      const ux0=col*triBase;
-      const ux1=(col+1)*triBase;
-      const uxm=(col+0.5)*triBase;
-      const uy0=y+triH; // bottom
-      const uy1=y;       // top
-
-      // Sample at centroid of up-pointing triangle
-      const ucx=(ux0+ux1+uxm)/3;
-      const ucy=(uy0+uy0+uy1)/3;
-      if(ucx>=0&&ucx<w&&ucy>=0&&ucy<h){
-        const px=sCtx.getImageData(Math.floor(ucx),Math.floor(ucy),1,1).data;
-        const darken=0.55;
-        ctx.fillStyle=`rgb(${Math.floor(px[0]*darken)},${Math.floor(px[1]*darken)},${Math.floor(px[2]*darken)})`;
-        ctx.beginPath();
-        ctx.moveTo(ux0,uy0);ctx.lineTo(ux1,uy0);ctx.lineTo(uxm,uy1);
-        ctx.closePath();ctx.fill();
-      }
-
-      // Down-pointing triangle: base at top
-      const dx0=col*triBase+triBase/2;
-      const dx1=(col+1)*triBase+triBase/2;
-      const dxm=(col+1)*triBase;
-      const dy0=y;        // top
-      const dy1=y+triH;   // bottom
-
-      const dcx=(dx0+dx1+dxm)/3;
-      const dcy=(dy0+dy0+dy1)/3;
-      if(dcx>=0&&dcx<w&&dcy>=0&&dcy<h){
-        const px=sCtx.getImageData(Math.floor(dcx),Math.floor(dcy),1,1).data;
-        const darken=0.55;
-        ctx.fillStyle=`rgb(${Math.floor(px[0]*darken)},${Math.floor(px[1]*darken)},${Math.floor(px[2]*darken)})`;
-        ctx.beginPath();
-        ctx.moveTo(dx0,dy0);ctx.lineTo(dx1,dy0);ctx.lineTo(dxm,dy1);
-        ctx.closePath();ctx.fill();
-      }
-    }
-  }
-
-  const t=new THREE.CanvasTexture(oC);
-  t.wrapS=THREE.RepeatWrapping;
-  t.wrapT=THREE.ClampToEdgeWrapping;
-  t.needsUpdate=true;
-  return t;
-}
 
 // ═══════════════════════════════════════════
 // 7. BUILD SPHERE
@@ -294,11 +205,11 @@ function build(){
   const{dualFaces:df,adjacency:ad}=computeDual(s.verts,s.faces);
   adj=ad;total=df.length;
 
-  if(!badTex)badTex=mkBadFallback();if(!goodTex)goodTex=mkGoodFallback();
+  if(!simTex)simTex=mkSimFallback();if(!realityTex)realityTex=mkRealityFallback();
   if(!poleInTex)poleInTex=mkPoleTex('IN');
   if(!poleOutTex)poleOutTex=mkPoleTex('OUT');
-  badTex.wrapS=THREE.RepeatWrapping;badTex.wrapT=THREE.ClampToEdgeWrapping;
-  goodTex.wrapS=THREE.RepeatWrapping;goodTex.wrapT=THREE.ClampToEdgeWrapping;
+  simTex.wrapS=THREE.RepeatWrapping;simTex.wrapT=THREE.ClampToEdgeWrapping;
+  realityTex.wrapS=THREE.RepeatWrapping;realityTex.wrapT=THREE.ClampToEdgeWrapping;
 
   // Find pole tiles (highest and lowest Y center)
   let topY=-Infinity,botY=Infinity;poleTop=-1;poleBot=-1;
@@ -342,8 +253,7 @@ function build(){
     geo.setAttribute('uv',new THREE.Float32BufferAttribute(new Float32Array(uvs),2));
 
     // Pole tiles get black texture with IN/OUT label
-    const activeBadTex=(gameMode==='hex'&&mosaicTex)?mosaicTex:badTex;
-    let tileTex=activeBadTex;
+    let tileTex=simTex;
     const isPole=(fi===poleTop||fi===poleBot);
     if(isPole)tileTex=fi===poleBot?poleInTex:poleOutTex;
 
@@ -383,38 +293,31 @@ function build(){
 // 8. FACE STATE & TILE APPEARANCE
 // ═══════════════════════════════════════════
 
-// Apply correct texture + UVs based on current view mode and tile state
+// Apply correct texture + UVs based on current view and tile state
 function applyTile(i){
   const f=fD[i];if(f.isPole)return;
-  if(gameMode==='hex'){
-    if(viewInside){
-      // Inside: mosaic for untransformed, good-day for transformed
-      f.mesh.material.map=f.state==='transformed'?goodTex:mosaicTex;
-      f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
-    } else {
-      // Outside: always good-day texture
-      f.mesh.material.map=goodTex;
-      if(f.state==='transformed'){
-        // Already resolved — show correct content
-        f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
-      } else if(f.scrambledUvs){
-        // Scrambled — show content from wrong position
-        f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.scrambledUvs.slice(),2));
-      } else {
-        f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
-      }
-    }
-  } else {
-    // Image mode: original behaviour
-    const activeBadTex=badTex;
-    f.mesh.material.map=f.state==='transformed'?goodTex:activeBadTex;
+  if(viewInside){
+    // Inside: simulation for untransformed tiles, reality for transformed tiles
+    f.mesh.material.map=f.state==='transformed'?realityTex:simTex;
     f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
+  } else {
+    // Outside: always reality texture (scrambled positions for unresolved tiles)
+    f.mesh.material.map=realityTex;
+    if(f.state==='transformed'){
+      // Already resolved — show correct content
+      f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
+    } else if(f.scrambledUvs){
+      // Scrambled — show content from wrong position
+      f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.scrambledUvs.slice(),2));
+    } else {
+      f.mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(f.uvs.slice(),2));
+    }
   }
   f.mesh.material.color.setRGB(1,1,1);
   f.mesh.material.needsUpdate=true;
 }
 
-// Legacy wrapper for image mode (keeps backlog code working)
+// Convenience wrapper: set state and re-apply the tile's appearance
 function setFS(i,st){
   const f=fD[i];if(f.isPole)return;
   f.state=st;
@@ -425,6 +328,8 @@ function setFS(i,st){
 function switchToInside(){
   viewInside=true;
   mom.x=0;mom.y=0; // kill momentum on view switch
+  // Restore the inside initial FOV (pinch-to-zoom may have changed camera.fov)
+  camera.fov=insideFOV;camera.updateProjectionMatrix();
   for(let i=0;i<fMeshes.length;i++){
     fMeshes[i].material.side=THREE.BackSide;
     fMeshes[i].material.needsUpdate=true;
@@ -438,6 +343,8 @@ function switchToInside(){
 function switchToOutside(){
   viewInside=false;
   mom.x=0;mom.y=0; // kill momentum on view switch
+  // Reset to the fixed outside FOV so the outside-zoom slider (distance) drives the zoom feel
+  camera.fov=OUTSIDE_FOV;camera.updateProjectionMatrix();
   for(let i=0;i<fMeshes.length;i++){
     fMeshes[i].material.side=THREE.FrontSide;
     fMeshes[i].material.needsUpdate=true;
@@ -493,7 +400,7 @@ function clearHL(){
 // ═══════════════════════════════════════════
 // 10. RENDER-TO-TEXTURE PREVIEW
 // Camera points at TARGET tile to show what
-// the good-day content looks like there
+// the reality content looks like there
 // ═══════════════════════════════════════════
 function renderPreview(targetIdx,size){
   const rt=new THREE.WebGLRenderTarget(size,size);
@@ -501,7 +408,7 @@ function renderPreview(targetIdx,size){
 
   for(let i=0;i<fMeshes.length;i++){
     if(i===targetIdx){
-      fMeshes[i].visible=true;fMeshes[i].material.map=goodTex;
+      fMeshes[i].visible=true;fMeshes[i].material.map=realityTex;
       fMeshes[i].material.side=THREE.BackSide; // always render preview from inside
       fMeshes[i].material.color.setRGB(1,1,1);fMeshes[i].material.needsUpdate=true;
       fMeshes[i].geometry.setAttribute('uv',new THREE.Float32BufferAttribute(fD[i].uvs.slice(),2));
@@ -577,11 +484,9 @@ function showThumb(targetIdx){
   // Clip to actual tile shape using projected vertices
   ctx.save();
 
-  // In mosaic mode, flip horizontally so preview matches outside view
-  if(gameMode==='hex'){
-    ctx.translate(SZ,0);
-    ctx.scale(-1,1);
-  }
+  // Flip horizontally so the preview matches the outside view
+  ctx.translate(SZ,0);
+  ctx.scale(-1,1);
 
   ctx.beginPath();
   ctx.moveTo(sv[0].x, sv[0].y);
@@ -591,16 +496,11 @@ function showThumb(targetIdx){
   ctx.drawImage(raw,0,0,renderSize,renderSize,0,0,SZ,SZ);
   ctx.restore();
 
-  // Orange border following actual tile shape (mirrored coords for mosaic)
+  // Orange border following actual tile shape (mirrored to match the flipped preview)
   ctx.strokeStyle='#e67e22';ctx.lineWidth=4;
   ctx.beginPath();
-  if(gameMode==='hex'){
-    ctx.moveTo(SZ-sv[0].x, sv[0].y);
-    for(let i=1;i<sv.length;i++) ctx.lineTo(SZ-sv[i].x, sv[i].y);
-  } else {
-    ctx.moveTo(sv[0].x, sv[0].y);
-    for(let i=1;i<sv.length;i++) ctx.lineTo(sv[i].x, sv[i].y);
-  }
+  ctx.moveTo(SZ-sv[0].x, sv[0].y);
+  for(let i=1;i<sv.length;i++) ctx.lineTo(SZ-sv[i].x, sv[i].y);
   ctx.closePath();
   ctx.stroke();
 
@@ -613,17 +513,7 @@ function hideThumb(){document.getElementById('previewHex').classList.remove('vis
 // 11. GAME LOGIC
 // ═══════════════════════════════════════════
 function startGame(){
-  // Generate mosaic texture in hex mode
-  if(gameMode==='hex'&&goodTex){
-    if(mosaicTex)mosaicTex.dispose();
-    mosaicTex=generateMosaicTex(goodTex,mosaicDensity);
-  }
-
   build();
-
-  // Show/hide controls based on mode
-  document.getElementById('mosaicRow').style.display=gameMode==='hex'?'flex':'none';
-  document.getElementById('uploadBadBtn').style.display=gameMode==='hex'?'none':'';
 
   // Build scramble map only for playable (non-pole) tiles
   const playIdx=[];
@@ -631,7 +521,7 @@ function startGame(){
   playable=playIdx.length;
 
   // Generate derangement for playable tiles
-  // sMap[i] = j means "outside position i holds the good-day content for position j"
+  // sMap[i] = j means "outside position i holds the reality content for position j"
   const d=derange(playable);
   sMap=new Array(total).fill(-1);
   for(let i=0;i<playable;i++)sMap[playIdx[i]]=playIdx[d[i]];
@@ -642,12 +532,8 @@ function startGame(){
   // Set initial tile states
   for(let i=0;i<total;i++)if(!fD[i].isPole)setFS(i,'hidden');
 
-  // Mosaic mode always starts inside
-  if(gameMode==='hex')switchToInside(); else {
-    // Image mode: ensure correct view
-    viewInside=true;
-    for(let i=0;i<fMeshes.length;i++){fMeshes[i].material.side=THREE.BackSide;fMeshes[i].material.needsUpdate=true;}
-  }
+  // Always start on the inside view
+  switchToInside();
 
   done=0;score=0;moves=0;carryF=-1;carryT=-1;
   hintLvl=0;hintTarget=-1;hintCD=0;hintCluster=null;
@@ -671,128 +557,92 @@ function pickUp(fi){
   const f=fD[fi];
   if(f.state==='transformed'||f.isPole)return;
 
-  if(gameMode==='hex'){
-    // MOSAIC MODE: pick tile inside, then flip to outside to search
-    carryF=fi; // inside position picked
-    carryT=findOutsideTile(fi); // outside tile holding fi's content
-    if(carryT<0)return;
+  // Pick the tile inside, then flip to the outside to search
+  carryF=fi; // inside position picked
+  carryT=findOutsideTile(fi); // outside tile holding fi's content
+  if(carryT<0)return;
 
-    phase='CARRYING';
-    snd('pickup');
+  phase='CARRYING';
+  snd('pickup');
 
-    // Render preview BEFORE switching view (renders from inside)
-    showThumb(carryF);
+  // Render preview BEFORE switching view (renders from inside)
+  showThumb(carryF);
 
-    // Amber pulse on selected tile before switching
-    showHL(fi);
-    document.getElementById('carryBar').classList.add('visible');
-    updInfo('Find the matching tile on the globe');
+  // Amber pulse on selected tile before switching
+  showHL(fi);
+  document.getElementById('carryBar').classList.add('visible');
+  updInfo('Find the matching tile on the globe');
 
-    // Delay the switch so player sees which tile they picked
-    setTimeout(()=>{
-      clearHL();
-      switchToOutside();
-    },900);
-  } else {
-    // IMAGE MODE: original behaviour
-    carryF=fi;carryT=sMap[fi];
-    phase='CARRYING';
-    showHL(fi);
-    showThumb(carryT);
-    snd('pickup');
-    document.getElementById('carryBar').classList.add('visible');
-    updInfo('Swipe to find where this belongs · Long-press to place');
-  }
+  // Delay the switch so the player sees which tile they picked
+  setTimeout(()=>{
+    clearHL();
+    switchToOutside();
+  },900);
 }
 
 function tryPlace(fi){
   if(phase!=='CARRYING'||carryF<0)return;
   if(fD[fi].isPole)return;
 
-  if(gameMode==='hex'){
-    // MOSAIC MODE: player taps a tile on the outside
-    if(fi===carryF){cancelC();return;} // tapping the same position = cancel
+  // Player taps a tile on the outside
+  if(fi===carryF){cancelC();return;} // tapping the same position = cancel
 
-    if(fi===carryT){
-      // Correct! This outside tile holds carryF's content
-      snd('correct');moves++;
+  if(fi===carryT){
+    // Correct! This outside tile holds carryF's content
+    snd('correct');moves++;
 
-      // Green pulse on the matched outside tile
-      greenFace=fi;greenEnd=Date.now()+600;
+    // Green pulse on the matched outside tile
+    greenFace=fi;greenEnd=Date.now()+600;
 
-      // Transform the inside tile
-      fD[carryF].state='transformed';done++;
+    // Transform the inside tile
+    fD[carryF].state='transformed';done++;
 
-      // Swap on outside: carryT gets whatever carryF had
-      sMap[carryT]=sMap[carryF];
-      computeScrambledUvs(carryT);
-      // carryF is now transformed, mark it resolved
-      sMap[carryF]=carryF;
-      fD[carryF].scrambledUvs=null;
+    // Swap on outside: carryT gets whatever carryF had
+    sMap[carryT]=sMap[carryF];
+    computeScrambledUvs(carryT);
+    // carryF is now transformed, mark it resolved
+    sMap[carryF]=carryF;
+    fD[carryF].scrambledUvs=null;
 
-      const placedTile=carryF;
+    const placedTile=carryF;
 
-      // Clear carry state
-      carryF=-1;carryT=-1;
-      phase='TRANSITIONING'; // block input during animation
-      document.getElementById('carryBar').classList.remove('visible');
-      hideThumb();hintLvl=0;hintCluster=null;clearTimeout(hintTO);
+    // Clear carry state
+    carryF=-1;carryT=-1;
+    phase='TRANSITIONING'; // block input during animation
+    document.getElementById('carryBar').classList.remove('visible');
+    hideThumb();hintLvl=0;hintCluster=null;clearTimeout(hintTO);
 
-      score+=100+Math.max(0,50-Math.floor(elapsed/playable*2));
-      updHUD();
+    score+=100+Math.max(0,50-Math.floor(elapsed/playable*2));
+    updHUD();
 
-      // After green pulse on outside, switch to inside centered on placed tile
-      setTimeout(()=>{
-        // Center camera on the placed tile
-        const c=fD[placedTile].center;
-        lat=Math.asin(Math.max(-1,Math.min(1,c[1])))*180/Math.PI;
-        lon=Math.atan2(c[2],-c[0])*180/Math.PI;
-        mom.x=0;mom.y=0; // kill momentum
+    // After green pulse on outside, switch to inside centered on placed tile
+    setTimeout(()=>{
+      // Center camera on the placed tile
+      const c=fD[placedTile].center;
+      lat=Math.asin(Math.max(-1,Math.min(1,c[1])))*180/Math.PI;
+      lon=Math.atan2(c[2],-c[0])*180/Math.PI;
+      mom.x=0;mom.y=0; // kill momentum
 
-        switchToInside();
+      switchToInside();
 
-        // Green pulse on the revealed inside tile
-        greenFace=placedTile;greenEnd=Date.now()+800;
-        showFlash('correct');
+      // Green pulse on the revealed inside tile
+      greenFace=placedTile;greenEnd=Date.now()+800;
+      showFlash('correct');
 
-        phase='PLAYING';
+      phase='PLAYING';
 
-        // Auto-complete last tile
-        if(done===playable-1){
-          for(let i=0;i<total;i++){if(!fD[i].isPole&&fD[i].state!=='transformed'){fD[i].state='transformed';done++;break;}}
-          updHUD();
-        }
-
-        if(done>=playable)setTimeout(finish,600);
-        else updInfo('Correct! Long-press another tile');
-      },650);
-    } else {
-      snd('wrong');showFlash('wrong');
-      updInfo('Not quite — keep looking');
-    }
-  } else {
-    // IMAGE MODE: original behaviour
-    if(fi===carryF){cancelC();return;}
-
-    if(fi===carryT){
-      snd('correct');moves++;
-      setFS(fi,'transformed');done++;
-      sMap[carryF]=sMap[fi];
-      clearHL();carryF=-1;carryT=-1;phase='PLAYING';
-      document.getElementById('carryBar').classList.remove('visible');
-      hideThumb();hintLvl=0;hintCluster=null;clearTimeout(hintTO);
-      score+=100+Math.max(0,50-Math.floor(elapsed/playable*2));
-      showFlash('correct');updHUD();
+      // Auto-complete last tile
       if(done===playable-1){
-        for(let i=0;i<total;i++){if(!fD[i].isPole&&fD[i].state!=='transformed'){setFS(i,'transformed');done++;break;}}
+        for(let i=0;i<total;i++){if(!fD[i].isPole&&fD[i].state!=='transformed'){fD[i].state='transformed';done++;break;}}
         updHUD();
       }
+
       if(done>=playable)setTimeout(finish,600);
       else updInfo('Correct! Long-press another tile');
-    } else {
-      snd('wrong');showFlash('wrong');
-      updInfo('Not quite — keep looking');
-    }
+    },650);
+  } else {
+    snd('wrong');showFlash('wrong');
+    updInfo('Not quite — keep looking');
   }
 }
 
@@ -801,8 +651,8 @@ function cancelC(){
   clearHL();phase='PLAYING';
   document.getElementById('carryBar').classList.remove('visible');
   hideThumb();hintLvl=0;hintTarget=-1;hintCluster=null;clearTimeout(hintTO);
-  // In mosaic mode, switch back to inside on cancel
-  if(gameMode==='hex'&&!viewInside)switchToInside();
+  // Always return to the inside view on cancel
+  if(!viewInside)switchToInside();
   updInfo('Long-press a tile to collect it');
 }
 
@@ -827,7 +677,7 @@ function useHint(){
 function finish(){
   phase='COMPLETE';if(tInt){clearInterval(tInt);tInt=null;}
   // Ensure we end on the inside view showing the completed scene
-  if(gameMode==='hex'&&!viewInside)switchToInside();
+  if(!viewInside)switchToInside();
   snd('done');score+=Math.max(0,1000-elapsed*2);
   document.getElementById('finalScore').textContent=score;
   const m=Math.floor(elapsed/60),s=elapsed%60;
@@ -880,7 +730,7 @@ renderer.domElement.addEventListener('mousedown',()=>{document.getElementById('s
 renderer.domElement.addEventListener('touchstart',()=>{document.getElementById('settingsPanel').classList.remove('visible');},{passive:true});
 
 document.getElementById('edgeBtn').addEventListener('click',()=>{edges=!edges;if(edgeGrp)edgeGrp.visible=edges;document.getElementById('edgeBtn').classList.toggle('active',edges);});
-document.getElementById('modeBtn').addEventListener('click',()=>{easy=!easy;document.getElementById('modeBtn').textContent=easy?'Easy':'Hard';document.getElementById('modeBtn').classList.toggle('active',easy);if(!easy)hideThumb();else if(carryF>=0){if(gameMode==='hex')showThumb(carryF);else if(carryT>=0)showThumb(carryT);}});
+document.getElementById('modeBtn').addEventListener('click',()=>{easy=!easy;document.getElementById('modeBtn').textContent=easy?'Easy':'Hard';document.getElementById('modeBtn').classList.toggle('active',easy);if(!easy)hideThumb();else if(carryF>=0)showThumb(carryF);});
 
 // Inside/Outside toggle
 function applyViewMode(){
@@ -891,12 +741,23 @@ document.getElementById('viewBtn').addEventListener('click',()=>{
 });
 let sTO=null;
 document.getElementById('hexSlider').addEventListener('input',e=>{const v=parseInt(e.target.value);document.getElementById('hexCount').textContent=((TC[v]||42)-2);clearTimeout(sTO);sTO=setTimeout(()=>{curSub=v;startGame();},400);});
-document.getElementById('mosaicSlider').addEventListener('input',e=>{mosaicDensity=parseInt(e.target.value);document.getElementById('mosaicVal').textContent=mosaicDensity;clearTimeout(sTO);sTO=setTimeout(()=>{startGame();},400);});
-document.getElementById('uploadBadBtn').addEventListener('click',()=>document.getElementById('fileBad').click());
-document.getElementById('uploadGoodBtn').addEventListener('click',()=>document.getElementById('fileGood').click());
+// Inside zoom slider — sets camera FOV for the inside view.
+document.getElementById('insideZoomSlider').addEventListener('input',e=>{
+  insideFOV=parseInt(e.target.value);
+  document.getElementById('insideZoomVal').textContent=insideFOV;
+  if(viewInside){camera.fov=insideFOV;camera.updateProjectionMatrix();}
+});
+// Outside zoom slider — sets the camera distance from the sphere centre when outside.
+document.getElementById('outsideZoomSlider').addEventListener('input',e=>{
+  outsideDist=parseInt(e.target.value);
+  document.getElementById('outsideZoomVal').textContent=outsideDist;
+  // Live update is automatic via the animate() loop, which reads outsideDist each frame.
+});
+document.getElementById('uploadSimBtn').addEventListener('click',()=>document.getElementById('fileSim').click());
+document.getElementById('uploadRealityBtn').addEventListener('click',()=>document.getElementById('fileReality').click());
 function ldTex(file,cb){const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const t=new THREE.Texture(img);t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;t.needsUpdate=true;cb(t);};img.src=ev.target.result;};r.readAsDataURL(file);}
-document.getElementById('fileBad').addEventListener('change',e=>{if(!e.target.files[0])return;ldTex(e.target.files[0],t=>{if(badTex)badTex.dispose();badTex=t;startGame();});});
-document.getElementById('fileGood').addEventListener('change',e=>{if(!e.target.files[0])return;ldTex(e.target.files[0],t=>{if(goodTex)goodTex.dispose();goodTex=t;startGame();});});
+document.getElementById('fileSim').addEventListener('change',e=>{if(!e.target.files[0])return;ldTex(e.target.files[0],t=>{if(simTex)simTex.dispose();simTex=t;startGame();});});
+document.getElementById('fileReality').addEventListener('change',e=>{if(!e.target.files[0])return;ldTex(e.target.files[0],t=>{if(realityTex)realityTex.dispose();realityTex=t;startGame();});});
 
 // ═══════════════════════════════════════════
 // 14. RENDER
@@ -911,12 +772,11 @@ function animate(){
     camera.position.set(0,0,0);
     camera.lookAt(500*Math.sin(phi)*Math.cos(theta),500*Math.cos(phi),500*Math.sin(phi)*Math.sin(theta));
   } else {
-    // Outside: camera orbits the sphere, looking inward at center
-    const dist=780;
+    // Outside: camera orbits the sphere at `outsideDist`, looking inward at center
     camera.position.set(
-      dist*Math.sin(phi)*Math.cos(theta),
-      dist*Math.cos(phi),
-      dist*Math.sin(phi)*Math.sin(theta)
+      outsideDist*Math.sin(phi)*Math.cos(theta),
+      outsideDist*Math.cos(phi),
+      outsideDist*Math.sin(phi)*Math.sin(theta)
     );
     camera.lookAt(0,0,0);
   }
@@ -956,9 +816,11 @@ window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.inn
 // Load embedded images, then build sphere
 let imgLoaded=0;
 function onImgReady(){imgLoaded++;if(imgLoaded>=2)build();}
-loadEmbeddedTex(BAD_IMG_SRC,t=>{badTex=t;onImgReady();});
-loadEmbeddedTex(GOOD_IMG_SRC,t=>{goodTex=t;onImgReady();});
-setTimeout(()=>{if(imgLoaded<2){if(!badTex)badTex=mkBadFallback();if(!goodTex)goodTex=mkGoodFallback();build();}},2000);
+// BAD_IMG_SRC / GOOD_IMG_SRC are the embedded default panoramas;
+// they now seed the simulation and reality textures respectively.
+loadEmbeddedTex(BAD_IMG_SRC,t=>{simTex=t;onImgReady();});
+loadEmbeddedTex(GOOD_IMG_SRC,t=>{realityTex=t;onImgReady();});
+setTimeout(()=>{if(imgLoaded<2){if(!simTex)simTex=mkSimFallback();if(!realityTex)realityTex=mkRealityFallback();build();}},2000);
 </script>
 </body>
 </html>
