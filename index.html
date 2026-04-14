@@ -92,12 +92,31 @@
 // 1. THREE.JS
 // ═══════════════════════════════════════════
 const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1100);
+// Far plane bumped to 5000 so the atmospheric backdrop sphere (radius ~2500) stays in view.
+const camera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,5000);
 camera.position.set(0,0,0);
 const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
 renderer.setSize(window.innerWidth,window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
 document.body.appendChild(renderer.domElement);
+
+// ═══════════════════════════════════════════
+// 1b. ATMOSPHERIC BACKDROP (outside view only)
+// A larger BackSide sphere textured with the simulation panorama so the player
+// sees a "warped ghost" of the inside world parallaxing behind the geodesic
+// sphere when orbiting outside. Desaturated + cool-tinted + slowly rotating
+// + gently breathing to sell the "simulation barely holding together" feel.
+// ═══════════════════════════════════════════
+let backdropMesh=null;
+function initBackdrop(){
+  const g=new THREE.SphereGeometry(2500,48,32);
+  const m=new THREE.MeshBasicMaterial({map:null,side:THREE.BackSide,color:new THREE.Color(0.35,0.48,0.62),depthWrite:false});
+  backdropMesh=new THREE.Mesh(g,m);
+  backdropMesh.renderOrder=-1;
+  backdropMesh.visible=false;
+  scene.add(backdropMesh);
+}
+initBackdrop();
 
 // ═══════════════════════════════════════════
 // 2. GEODESIC
@@ -229,6 +248,8 @@ function build(){
   if(!simTex)simTex=mkSimFallback();if(!realityTex)realityTex=mkRealityFallback();
   simTex.wrapS=THREE.RepeatWrapping;simTex.wrapT=THREE.ClampToEdgeWrapping;
   realityTex.wrapS=THREE.RepeatWrapping;realityTex.wrapT=THREE.ClampToEdgeWrapping;
+  // Backdrop shares the simulation texture (desaturated via material.color tint).
+  if(backdropMesh){backdropMesh.material.map=simTex;backdropMesh.material.needsUpdate=true;}
 
   const aE=[],aPE=[];
   // Face subdivision: handle curSub=0 safely
@@ -267,7 +288,12 @@ function build(){
     const mesh=new THREE.Mesh(geo,mat);mesh.userData.fi=fi;
     geoGrp.add(mesh);fMeshes.push(mesh);
 
-    fD.push({center:face.center,verts:vt,sides:n,mesh,uvs:new Float32Array(uvs),state:'hidden'});
+    // Outward face normal in world space (X is negated when building geometry above).
+    const fc=face.center;
+    const nlen=Math.hypot(-fc[0],fc[1],fc[2])||1;
+    const normal={x:-fc[0]/nlen,y:fc[1]/nlen,z:fc[2]/nlen};
+    fD.push({center:face.center,verts:vt,sides:n,mesh,uvs:new Float32Array(uvs),state:'hidden',
+             normal,phase:fi*0.73,curOffset:0});
 
     // Grid edges
     const eA=n===5?aPE:aE;
@@ -349,6 +375,7 @@ function switchToInside(){
     }
     document.getElementById('viewBtn').textContent='Outside';
     document.getElementById('viewBtn').classList.remove('active');
+    if(backdropMesh)backdropMesh.visible=false;
   });
 }
 
@@ -366,6 +393,7 @@ function switchToOutside(){
     }
     document.getElementById('viewBtn').textContent='Inside';
     document.getElementById('viewBtn').classList.add('active');
+    if(backdropMesh)backdropMesh.visible=true;
   });
 }
 
@@ -704,11 +732,12 @@ function finish(){
 // ═══════════════════════════════════════════
 const rc=new THREE.Raycaster(),pt=new THREE.Vector2();
 let lon=0,lat=0,pDown=false,pX=0,pY=0,mom={x:0,y:0};
+let lastTouch=Date.now(); // for idle auto-rotation on the outside view
 let lpT=null,lpS={x:0,y:0};
 function gP(e){return e.touches?e.touches[0]:e;}
-function onD(e){if(e.touches&&e.touches.length>1)return;ensA();const p=gP(e);pDown=true;mom.x=0;mom.y=0;pX=p.clientX;pY=p.clientY;lpS.x=p.clientX;lpS.y=p.clientY;clearTimeout(lpT);lpT=setTimeout(()=>doLP(lpS.x,lpS.y),400);}
+function onD(e){if(e.touches&&e.touches.length>1)return;ensA();const p=gP(e);pDown=true;lastTouch=Date.now();mom.x=0;mom.y=0;pX=p.clientX;pY=p.clientY;lpS.x=p.clientX;lpS.y=p.clientY;clearTimeout(lpT);lpT=setTimeout(()=>doLP(lpS.x,lpS.y),400);}
 function onM(e){if(!pDown)return;if(e.touches&&e.touches.length>1)return;e.preventDefault();const p=gP(e);const dx=p.clientX-pX,dy=p.clientY-pY;const hDir=viewInside?-1:1;lon+=hDir*dx*.25;lat+=dy*.25;lat=Math.max(-85,Math.min(85,lat));mom.x=hDir*dx*.15;mom.y=dy*.15;pX=p.clientX;pY=p.clientY;const mx=p.clientX-lpS.x,my=p.clientY-lpS.y;if(mx*mx+my*my>100){clearTimeout(lpT);lpT=null;}}
-function onU(){pDown=false;clearTimeout(lpT);lpT=null;}
+function onU(){pDown=false;lastTouch=Date.now();clearTimeout(lpT);lpT=null;}
 function doLP(sx,sy){pt.x=(sx/window.innerWidth)*2-1;pt.y=-(sy/window.innerHeight)*2+1;rc.setFromCamera(pt,camera);const h=rc.intersectObjects(fMeshes);if(!h.length)return;const fi=h[0].object.userData.fi;if(phase==='PLAYING')pickUp(fi);else if(phase==='CARRYING')tryPlace(fi);}
 const el=renderer.domElement;
 el.addEventListener('mousedown',onD);el.addEventListener('mousemove',onM);el.addEventListener('mouseup',onU);el.addEventListener('mouseleave',onU);
@@ -777,6 +806,40 @@ const clk=new THREE.Clock();
 function animate(){
   requestAnimationFrame(animate);const time=clk.getElapsedTime();
   if(!pDown){lon+=mom.x;lat+=mom.y;lat=Math.max(-85,Math.min(85,lat));mom.x*=.93;mom.y*=.93;if(Math.abs(mom.x)<.001)mom.x=0;if(Math.abs(mom.y)<.001)mom.y=0;}
+
+  // Idle auto-rotation: after ~3s of no touches on the outside view, gently drift lon
+  // so the sphere feels like an object on display. Eases in over 2s, cancels on touch.
+  if(!viewInside && !pDown && phase!=='START' && phase!=='FINISHED'){
+    const idleMs=Date.now()-lastTouch-3000;
+    if(idleMs>0){
+      const ramp=Math.min(1,idleMs/2000);
+      lon+=0.08*ramp;
+    }
+  }
+
+  // Per-tile outward breathing on the outside view — spaced hexagons that drift
+  // around a base offset, giving the "simulation only just hanging together" feel.
+  // Smoothly eases back to zero on the inside so no gaps show through.
+  if(fD.length){
+    const targetBase=viewInside?0:4;     // base outward push in world units
+    const targetAmp =viewInside?0:1.8;   // oscillation amplitude
+    for(let i=0;i<fD.length;i++){
+      const f=fD[i]; if(!f||!f.mesh||!f.normal)continue;
+      const tgt=targetBase + targetAmp*Math.sin(time*0.9 + f.phase);
+      f.curOffset += (tgt - f.curOffset)*0.12;
+      if(Math.abs(f.curOffset)<0.01 && viewInside){f.curOffset=0;}
+      f.mesh.position.set(f.normal.x*f.curOffset, f.normal.y*f.curOffset, f.normal.z*f.curOffset);
+    }
+  }
+
+  // Backdrop atmosphere — breathing scale + slow independent rotation.
+  if(backdropMesh && backdropMesh.visible){
+    const s=1+0.02*Math.sin(time*0.8);
+    backdropMesh.scale.set(s,s,s);
+    backdropMesh.rotation.y=time*0.02;
+    backdropMesh.rotation.x=Math.sin(time*0.15)*0.05;
+  }
+
   const phi=THREE.MathUtils.degToRad(90-lat),theta=THREE.MathUtils.degToRad(lon);
   if(viewInside){
     // Inside: camera at center, looking outward
