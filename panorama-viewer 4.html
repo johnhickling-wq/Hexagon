@@ -178,6 +178,129 @@ function computeDual(verts,faces){
 function s2uv(x,y,z){return[(Math.atan2(z,x)/(2*Math.PI)+.5),Math.asin(Math.max(-1,Math.min(1,y)))/Math.PI+.5];}
 
 // ═══════════════════════════════════════════
+// 2b. SPHERICAL VORONOI PIPELINE
+// Replaces the geodesic dual with irregular Voronoi cells seeded on a
+// Fibonacci sphere. The convex hull of points on a unit sphere IS the
+// spherical Delaunay triangulation; the Voronoi dual falls out by
+// collecting each site's surrounding triangle circumcenters (= normalised
+// triangle normals on the unit sphere) and sorting them around the site's
+// tangent plane.
+// ═══════════════════════════════════════════
+function mulberry32(seed){let s=seed>>>0;return function(){s=(s+0x6D2B79F5)>>>0;let t=s;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};}
+
+function fibSphere(n,rng){
+  const pts=[],phi=(1+Math.sqrt(5))/2,jit=0.15/Math.sqrt(n);
+  for(let i=0;i<n;i++){
+    const y=1-(2*(i+0.5))/n, r=Math.sqrt(Math.max(0,1-y*y)), theta=2*Math.PI*i/phi;
+    let x=r*Math.cos(theta)+(rng()-0.5)*jit;
+    let yy=y+(rng()-0.5)*jit;
+    let z=r*Math.sin(theta)+(rng()-0.5)*jit;
+    const l=Math.hypot(x,yy,z)||1; pts.push({x:x/l,y:yy/l,z:z/l});
+  }
+  return pts;
+}
+
+// 3D convex hull via incremental insertion. For points on the unit sphere
+// this returns the spherical Delaunay triangulation. Faces carry outward
+// normals (sign-corrected so origin is on the opposite side).
+function convexHull3D(pts){
+  function cross(a,b){return{x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x};}
+  function sub(a,b){return{x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};}
+  // Raw face from indices — winding sets n direction, no orientation fix.
+  function faceOf(ai,bi,ci){
+    const pa=pts[ai],pb=pts[bi],pc=pts[ci];
+    return {a:ai,b:bi,c:ci,n:cross(sub(pb,pa),sub(pc,pa))};
+  }
+  // Bootstrap: orient each face so the 4th (interior) vertex is behind it.
+  // Fibonacci seeds cluster at one pole at the start, so we can't assume the
+  // first 4 points enclose the origin — but the 4th vertex being "inside"
+  // each of the 3 other faces is a valid orientation test no matter where
+  // the tetrahedron sits on the sphere.
+  function faceAway(ai,bi,ci,di){
+    let f=faceOf(ai,bi,ci);
+    const pa=pts[ai],pd=pts[di];
+    if((pd.x-pa.x)*f.n.x+(pd.y-pa.y)*f.n.y+(pd.z-pa.z)*f.n.z>0) f=faceOf(ai,ci,bi);
+    return f;
+  }
+  let faces=[faceAway(0,1,2,3),faceAway(0,2,3,1),faceAway(0,3,1,2),faceAway(1,3,2,0)];
+  for(let i=4;i<pts.length;i++){
+    const p=pts[i], visible=[];
+    for(let f=0;f<faces.length;f++){
+      const face=faces[f],pa=pts[face.a];
+      // Signed distance from p to face plane; >eps means p is outside the face.
+      if((p.x-pa.x)*face.n.x+(p.y-pa.y)*face.n.y+(p.z-pa.z)*face.n.z>1e-10) visible.push(f);
+    }
+    if(!visible.length)continue; // p is inside current hull (rare on unit sphere)
+    // Horizon edges: those appearing in exactly one visible face (boundary).
+    const edgeUses=new Map();
+    for(const vf of visible){
+      const f=faces[vf];
+      const es=[[f.a,f.b],[f.b,f.c],[f.c,f.a]];
+      for(const [u,v] of es){
+        const k=u<v?u+','+v:v+','+u;
+        edgeUses.set(k,(edgeUses.get(k)||0)+1);
+      }
+    }
+    const horizon=[];
+    for(const vf of visible){
+      const f=faces[vf];
+      const es=[[f.a,f.b],[f.b,f.c],[f.c,f.a]];
+      for(const [u,v] of es){
+        const k=u<v?u+','+v:v+','+u;
+        if(edgeUses.get(k)===1) horizon.push([u,v]); // preserve orientation from visible face
+      }
+    }
+    const visSet=new Set(visible);
+    const kept=[]; for(let f=0;f<faces.length;f++) if(!visSet.has(f)) kept.push(faces[f]);
+    // New faces inherit outward winding from the horizon-edge direction
+    // (which came from the visible face with a known outward normal).
+    for(const [u,v] of horizon) kept.push(faceOf(u,v,i));
+    faces=kept;
+  }
+  return faces.map(f=>[f.a,f.b,f.c]);
+}
+
+// Assemble Voronoi cells + adjacency from the Delaunay triangulation.
+function buildVoronoi(n){
+  const rng=mulberry32(0xC0FFEE ^ n);       // deterministic per tile count
+  const pts=fibSphere(n,rng);
+  const tris=convexHull3D(pts);
+  // Circumcenter of each Delaunay triangle on the unit sphere is the
+  // outward-normalised face normal.
+  const cc=tris.map(([a,b,c])=>{
+    const pa=pts[a],pb=pts[b],pc=pts[c];
+    let nx=(pb.y-pa.y)*(pc.z-pa.z)-(pb.z-pa.z)*(pc.y-pa.y);
+    let ny=(pb.z-pa.z)*(pc.x-pa.x)-(pb.x-pa.x)*(pc.z-pa.z);
+    let nz=(pb.x-pa.x)*(pc.y-pa.y)-(pb.y-pa.y)*(pc.x-pa.x);
+    if(pa.x*nx+pa.y*ny+pa.z*nz<0){nx=-nx;ny=-ny;nz=-nz;}
+    const l=Math.hypot(nx,ny,nz)||1;
+    return {x:nx/l,y:ny/l,z:nz/l};
+  });
+  const siteTris=Array.from({length:n},()=>[]);
+  for(let i=0;i<tris.length;i++){siteTris[tris[i][0]].push(i);siteTris[tris[i][1]].push(i);siteTris[tris[i][2]].push(i);}
+  const cells=[];
+  for(let i=0;i<n;i++){
+    const s=pts[i];
+    // Tangent frame at site: pick an up that isn't parallel, then build u,v.
+    let upX=0,upY=1,upZ=0; if(Math.abs(s.y)>0.9){upX=1;upY=0;upZ=0;}
+    let ux=upY*s.z-upZ*s.y, uy=upZ*s.x-upX*s.z, uz=upX*s.y-upY*s.x;
+    const ul=Math.hypot(ux,uy,uz)||1; ux/=ul; uy/=ul; uz/=ul;
+    const vx=s.y*uz-s.z*uy, vy=s.z*ux-s.x*uz, vz=s.x*uy-s.y*ux;
+    const items=siteTris[i].map(ti=>{
+      const c=cc[ti];
+      return {ti, ang:Math.atan2(c.x*vx+c.y*vy+c.z*vz, c.x*ux+c.y*uy+c.z*uz)};
+    });
+    items.sort((a,b)=>a.ang-b.ang);
+    const verts=items.map(x=>[cc[x.ti].x, cc[x.ti].y, cc[x.ti].z]);
+    cells.push({center:[s.x,s.y,s.z], vertices:verts, sides:verts.length});
+  }
+  // Adjacency: two sites are neighbours iff they share a Delaunay edge.
+  const aset=Array.from({length:n},()=>new Set());
+  for(const [a,b,c] of tris){aset[a].add(b);aset[a].add(c);aset[b].add(a);aset[b].add(c);aset[c].add(a);aset[c].add(b);}
+  return {cells, adjacency:aset.map(s=>Array.from(s))};
+}
+
+// ═══════════════════════════════════════════
 // 3. TEXTURES
 // ═══════════════════════════════════════════
 // Embedded Skybox images as default textures
@@ -274,9 +397,11 @@ function build(){
   if(hlGrp){hlGrp.traverse(c=>{if(c.geometry)c.geometry.dispose();if(c.material)c.material.dispose();});scene.remove(hlGrp);}
   geoGrp=new THREE.Group();edgeGrp=new THREE.Group();hlGrp=new THREE.Group();fMeshes=[];fD=[];
 
-  const ic=createIco(),s=subdivide(ic.verts,ic.faces,curSub);
-  const{dualFaces:df,adjacency:ad}=computeDual(s.verts,s.faces);
-  adj=ad;total=df.length;
+  // Spherical Voronoi cells from Fibonacci seeds (deterministic per tile count).
+  // df carries the same shape as the old geodesic dual — downstream code is
+  // unchanged.
+  const vor=buildVoronoi(TC[curSub]);
+  const df=vor.cells; adj=vor.adjacency; total=df.length;
 
   if(!simTex)simTex=mkSimFallback();if(!realityTex)realityTex=mkRealityFallback();
   simTex.wrapS=THREE.RepeatWrapping;simTex.wrapT=THREE.ClampToEdgeWrapping;
@@ -285,39 +410,32 @@ function build(){
   if(backdropMesh){backdropMesh.material.map=simTex;backdropMesh.material.needsUpdate=true;}
 
   const aE=[],aPE=[];
-  // Face subdivision: handle curSub=0 safely
-  const fS=curSub===0?3:Math.max(2,Math.ceil(8/curSub));
 
   for(let fi=0;fi<df.length;fi++){
     const face=df[fi],vt=face.vertices,n=vt.length;
     const pos=[],uvs=[];
+    // Plain fan from cell centre — one triangle per boundary edge. Each
+    // triangle is flat; at 42-642 cells the facet size reads fine.
     for(let i=0;i<n;i++){
-      const v0=face.center,v1=vt[i],v2=vt[(i+1)%n];
-      for(let row=0;row<fS;row++){
-        const r0=row/fS,r1=(row+1)/fS;
-        for(let col=0;col<=row;col++){
-          const c0=row>0?col/row:0,c1=col/(row+1),c2=(col+1)/(row+1);
-          function lp(t,s){return[v0[0]*(1-t)+(v1[0]*s+v2[0]*(1-s))*t,v0[1]*(1-t)+(v1[1]*s+v2[1]*(1-s))*t,v0[2]*(1-t)+(v1[2]*s+v2[2]*(1-s))*t];}
-          const a0=lp(r0,c0),b0=lp(r1,c1),b1=lp(r1,c2);
-          pos.push(-a0[0]*RAD,a0[1]*RAD,a0[2]*RAD,-b0[0]*RAD,b0[1]*RAD,b0[2]*RAD,-b1[0]*RAD,b1[1]*RAD,b1[2]*RAD);
-          const ua=s2uv(-a0[0],a0[1],a0[2]),ub=s2uv(-b0[0],b0[1],b0[2]),uc=s2uv(-b1[0],b1[1],b1[2]);
-          if(Math.max(ua[0],ub[0],uc[0])-Math.min(ua[0],ub[0],uc[0])>.5){if(ua[0]<.5)ua[0]+=1;if(ub[0]<.5)ub[0]+=1;if(uc[0]<.5)uc[0]+=1;}
-          uvs.push(ua[0],ua[1],ub[0],ub[1],uc[0],uc[1]);
-          if(col<row){
-            const cb=(col+1)/row,a1=lp(r0,cb);
-            pos.push(-a0[0]*RAD,a0[1]*RAD,a0[2]*RAD,-b1[0]*RAD,b1[1]*RAD,b1[2]*RAD,-a1[0]*RAD,a1[1]*RAD,a1[2]*RAD);
-            const ud=s2uv(-a1[0],a1[1],a1[2]),ua2=[ua[0],ua[1]],uc2=[uc[0],uc[1]];
-            if(Math.max(ua2[0],uc2[0],ud[0])-Math.min(ua2[0],uc2[0],ud[0])>.5){if(ua2[0]<.5)ua2[0]+=1;if(uc2[0]<.5)uc2[0]+=1;if(ud[0]<.5)ud[0]+=1;}
-            uvs.push(ua2[0],ua2[1],uc2[0],uc2[1],ud[0],ud[1]);
-          }
-        }
+      const v0=face.center, v1=vt[i], v2=vt[(i+1)%n];
+      pos.push(-v0[0]*RAD,v0[1]*RAD,v0[2]*RAD,
+               -v1[0]*RAD,v1[1]*RAD,v1[2]*RAD,
+               -v2[0]*RAD,v2[1]*RAD,v2[2]*RAD);
+      const ua=s2uv(-v0[0],v0[1],v0[2]), ub=s2uv(-v1[0],v1[1],v1[2]), uc=s2uv(-v2[0],v2[1],v2[2]);
+      // UV seam fix across the 0/360 meridian: shift sub-0.5 u's up by 1.
+      if(Math.max(ua[0],ub[0],uc[0])-Math.min(ua[0],ub[0],uc[0])>.5){
+        if(ua[0]<.5)ua[0]+=1; if(ub[0]<.5)ub[0]+=1; if(uc[0]<.5)uc[0]+=1;
       }
+      uvs.push(ua[0],ua[1],ub[0],ub[1],uc[0],uc[1]);
     }
     const geo=new THREE.BufferGeometry();
     geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
     geo.setAttribute('uv',new THREE.Float32BufferAttribute(new Float32Array(uvs),2));
 
-    const mat=new THREE.MeshBasicMaterial({map:simTex,side:THREE.BackSide});
+    // DoubleSide: Voronoi winding after x-negation produces outward normals,
+    // so BackSide would cull every face. DoubleSide makes the tessellation
+    // visible from both inside and outside without per-view side flips.
+    const mat=new THREE.MeshBasicMaterial({map:simTex,side:THREE.DoubleSide});
     const mesh=new THREE.Mesh(geo,mat);mesh.userData.fi=fi;
     geoGrp.add(mesh);fMeshes.push(mesh);
 
@@ -328,7 +446,7 @@ function build(){
     fD.push({center:face.center,verts:vt,sides:n,mesh,uvs:new Float32Array(uvs),state:'hidden',
              normal,phase:fi*0.73,curOffset:0});
 
-    // Grid edges
+    // Grid edges — keep the 5-sided-cell = pentagon-colour rule.
     const eA=n===5?aPE:aE;
     for(let i=0;i<n;i++){const e1=vt[i],e2=vt[(i+1)%n];
       eA.push(-e1[0]*RAD*.998,e1[1]*RAD*.998,e1[2]*RAD*.998,-e2[0]*RAD*.998,e2[1]*RAD*.998,e2[2]*RAD*.998);}
@@ -402,8 +520,6 @@ function switchToInside(){
     // Restore the inside initial FOV (pinch-to-zoom may have changed camera.fov)
     camera.fov=insideFOV;camera.updateProjectionMatrix();
     for(let i=0;i<fMeshes.length;i++){
-      fMeshes[i].material.side=THREE.BackSide;
-      fMeshes[i].material.needsUpdate=true;
       applyTile(i);
     }
     document.getElementById('viewBtn').textContent='Outside';
@@ -421,8 +537,6 @@ function switchToOutside(){
     // Reset to the fixed outside FOV so the outside-zoom slider (distance) drives the zoom feel
     camera.fov=OUTSIDE_FOV;camera.updateProjectionMatrix();
     for(let i=0;i<fMeshes.length;i++){
-      fMeshes[i].material.side=THREE.FrontSide;
-      fMeshes[i].material.needsUpdate=true;
       applyTile(i);
     }
     document.getElementById('viewBtn').textContent='Inside';
