@@ -56,12 +56,25 @@
   canvas.shake{animation:shakeX .35s ease-in-out;}
   #viewFade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .14s ease;z-index:50;}
   #viewFade.on{opacity:1;}
+  .combo-display{font-size:16px;font-weight:700;color:#f0c040;pointer-events:none;opacity:0;transition:opacity .2s;}
+  .combo-display.visible{opacity:1;}
+  .combo-display.bounce{animation:comboBounce .3s ease;}
+  @keyframes comboBounce{0%{transform:scale(1);}50%{transform:scale(1.6);}100%{transform:scale(1);}}
+  .combo-display.shatter{animation:comboShatter .4s ease forwards;}
+  @keyframes comboShatter{0%{opacity:1;transform:scale(1);}100%{opacity:0;transform:scale(.5);}}
+  .exposure-bar{position:absolute;bottom:66px;left:16px;right:16px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;z-index:11;display:none;pointer-events:none;}
+  .exposure-bar.visible{display:block;}
+  .exposure-fill{height:100%;border-radius:2px;transition:width .15s linear,background .3s;width:100%;background:#4CAF50;}
+  .exposure-fill.warn{background:#FFC107;}
+  .exposure-fill.critical{background:#F44336;animation:expPulse .6s infinite;}
+  @keyframes expPulse{0%,100%{opacity:1;}50%{opacity:.5;}}
 </style>
 </head>
 <body>
 <div class="overlay" id="startScreen"><h1>Better Day</h1><div class="subtitle">Collect hidden tiles and piece together a better world.<br>Long-press to collect · Swipe to explore · Long-press to place.</div><button class="play-btn" id="startBtn">Play</button></div>
 <div class="overlay hidden" id="completeScreen"><h2>A Better Day!</h2><div class="score-display" id="finalScore">0</div><div class="stats" id="finalStats"></div><button class="play-btn" id="replayBtn">Play Again</button></div>
-<div class="hud" id="hud" style="display:none;"><div class="hud-top"><div class="hud-score" id="scoreDisplay">0</div><div class="hud-right"><div class="settings-btn" id="settingsBtn">⚙</div><div class="hud-timer" id="timerDisplay">0:00</div></div></div><div class="hud-progress"><div class="hud-progress-bar" id="progressBar"></div></div></div>
+<div class="hud" id="hud" style="display:none;"><div class="hud-top"><div class="hud-score" id="scoreDisplay">0</div><div class="combo-display" id="comboDisplay"></div><div class="hud-right"><div class="settings-btn" id="settingsBtn">⚙</div><div class="hud-timer" id="timerDisplay">0:00</div></div></div><div class="hud-progress"><div class="hud-progress-bar" id="progressBar"></div></div></div>
+<div class="exposure-bar" id="exposureBar"><div class="exposure-fill" id="exposureFill"></div></div>
 <div class="carry-bar" id="carryBar"><div class="carry-text">Find where this belongs</div><button class="cancel-btn" id="cancelBtn">Cancel</button></div>
 <canvas class="preview-hex" id="previewHex" width="210" height="210"></canvas>
 <div class="hint-btn hidden" id="hintBtn">?</div>
@@ -84,6 +97,8 @@
     <button class="s-btn" id="edgeBtn">Edges</button>
     <button class="s-btn active" id="modeBtn">Easy</button>
     <button class="s-btn" id="viewBtn">Outside</button>
+    <button class="s-btn active" id="exposureBtn">Timer</button>
+    <button class="s-btn active" id="diffGlowBtn">Glow</button>
   </div>
 </div>
 <input type="file" id="fileSim" accept="image/*"><input type="file" id="fileReality" accept="image/*">
@@ -388,6 +403,10 @@ let tileDriftBase=12;           // base outward push in world units (amp tracks 
 let backdropDir=1;              // +1 or -1 to flip the slow backdrop rotation
 let particlesOn=false;          // faint drifting particles toggle
 const OUTSIDE_FOV=75; // fixed FOV when outside; distance drives the zoom feel
+let comboStreak=0,comboMult=1,bestStreak=0;
+const COMBO_CURVE=[1,1.5,2,3,5];
+let exposureOn=true,exposureTime=0,exposureMax=20,exposureActive=false;
+let diffGlowOn=true;
 let geoGrp=null,edgeGrp=null,hlGrp=null,fMeshes=[];
 
 // ═══════════════════════════════════════════
@@ -477,6 +496,46 @@ function build(){
   playable=total;
 }
 
+function computeDifficulty(){
+  const src=realityTex.image;
+  const w=src.width,h=src.height;
+  const tmpC=document.createElement('canvas');tmpC.width=w;tmpC.height=h;
+  const tCtx=tmpC.getContext('2d');tCtx.drawImage(src,0,0);
+  const imgData=tCtx.getImageData(0,0,w,h);
+  for(let i=0;i<fD.length;i++){
+    const f=fD[i];
+    const samples=[];
+    const cuv=s2uv(-f.center[0],f.center[1],f.center[2]);
+    samples.push(cuv);
+    for(let j=0;j<f.verts.length;j++){
+      const v=f.verts[j];
+      const vuv=s2uv(-v[0],v[1],v[2]);
+      samples.push([(cuv[0]+vuv[0])/2,(cuv[1]+vuv[1])/2]);
+    }
+    let sumR=0,sumG=0,sumB=0,sumR2=0,sumG2=0,sumB2=0,n=0;
+    for(const [u,vv] of samples){
+      const px=Math.min(w-1,Math.max(0,Math.floor(((u%1+1)%1)*w)));
+      const py=Math.min(h-1,Math.max(0,Math.floor((1-vv)*h)));
+      const idx=(py*w+px)*4;
+      const r=imgData.data[idx],g=imgData.data[idx+1],b=imgData.data[idx+2];
+      sumR+=r;sumG+=g;sumB+=b;sumR2+=r*r;sumG2+=g*g;sumB2+=b*b;n++;
+    }
+    const varR=sumR2/n-(sumR/n)**2;
+    const varG=sumG2/n-(sumG/n)**2;
+    const varB=sumB2/n-(sumB/n)**2;
+    f.variance=(varR+varG+varB)/3;
+  }
+  const sorted=[...fD].sort((a,b)=>a.variance-b.variance);
+  const t1=Math.floor(sorted.length/3),t2=Math.floor(sorted.length*2/3);
+  const hardThresh=sorted[t1].variance;
+  const easyThresh=sorted[t2].variance;
+  for(const f of fD){
+    if(f.variance<=hardThresh)f.difficulty='hard';
+    else if(f.variance>=easyThresh)f.difficulty='easy';
+    else f.difficulty='medium';
+  }
+}
+
 // ═══════════════════════════════════════════
 // 8. FACE STATE & TILE APPEARANCE
 // ═══════════════════════════════════════════
@@ -521,6 +580,7 @@ function withFade(body){
 
 // Switch all tiles to inside view
 function switchToInside(){
+  exposureActive=false;updExposureBar();
   withFade(()=>{
     viewInside=true;
     mom.x=0;mom.y=0; // kill momentum on view switch
@@ -729,8 +789,11 @@ function startGame(){
   // Always start on the inside view
   switchToInside();
 
+  computeDifficulty();
   done=0;score=0;moves=0;carryF=-1;carryT=-1;
   hintLvl=0;hintTarget=-1;hintCD=0;hintCluster=null;
+  comboStreak=0;comboMult=1;bestStreak=0;
+  exposureTime=0;exposureActive=false;
   elapsed=0;t0=Date.now();
   if(tInt)clearInterval(tInt);
   tInt=setInterval(()=>{if(phase==='PLAYING'||phase==='CARRYING'){elapsed=Math.floor((Date.now()-t0)/1000);updHUD();}},1000);
@@ -740,7 +803,8 @@ function startGame(){
   document.getElementById('hud').style.display='';
   document.getElementById('hintBtn').classList.remove('hidden');
   document.getElementById('settingsPanel').classList.remove('visible');
-  hideThumb();clearHL();updHUD();
+  hideThumb();clearHL();updHUD();updCombo();
+  document.getElementById('exposureBar').classList.remove('visible');
   document.getElementById('hexSlider').value=curSub;
   document.getElementById('hexCount').textContent=playable;
   updInfo('Long-press any tile to collect it');
@@ -771,6 +835,7 @@ function pickUp(fi){
   setTimeout(()=>{
     clearHL();
     switchToOutside();
+    if(exposureOn){exposureTime=exposureMax;exposureActive=true;updExposureBar();}
   },900);
 }
 
@@ -805,8 +870,13 @@ function tryPlace(fi){
     document.getElementById('carryBar').classList.remove('visible');
     hideThumb();hintLvl=0;hintCluster=null;clearTimeout(hintTO);
 
-    score+=100+Math.max(0,50-Math.floor(elapsed/playable*2));
-    updHUD();
+    comboStreak++;comboMult=COMBO_CURVE[Math.min(comboStreak-1,COMBO_CURVE.length-1)];
+    if(comboStreak>bestStreak)bestStreak=comboStreak;
+    const diffBonus=fD[placedTile].difficulty==='hard'?2:fD[placedTile].difficulty==='medium'?1.5:1;
+    const baseScore=100+Math.max(0,50-Math.floor(elapsed/playable*2));
+    score+=Math.round(baseScore*comboMult*diffBonus);
+    if(exposureOn&&exposureActive)exposureTime=Math.min(exposureMax,exposureTime+8);
+    updHUD();updCombo();updExposureBar();
 
     // After green pulse on outside, switch to inside centered on placed tile
     setTimeout(()=>{
@@ -835,6 +905,8 @@ function tryPlace(fi){
     },650);
   } else {
     snd('wrong');showFlash('wrong');
+    breakCombo();updCombo();
+    if(exposureOn&&exposureActive){exposureTime=Math.max(0,exposureTime-4);updExposureBar();}
     const cv=renderer.domElement; cv.classList.remove('shake'); void cv.offsetWidth; cv.classList.add('shake');
     updInfo('Not quite — keep looking');
   }
@@ -842,10 +914,11 @@ function tryPlace(fi){
 
 function cancelC(){
   if(carryF>=0){carryF=-1;carryT=-1;}
+  breakCombo();updCombo();
+  exposureActive=false;updExposureBar();
   clearHL();phase='PLAYING';
   document.getElementById('carryBar').classList.remove('visible');
   hideThumb();hintLvl=0;hintTarget=-1;hintCluster=null;clearTimeout(hintTO);
-  // Always return to the inside view on cancel
   if(!viewInside)switchToInside();
   updInfo('Long-press a tile to collect it');
 }
@@ -853,6 +926,7 @@ function cancelC(){
 function useHint(){
   if(phase!=='CARRYING'||carryT<0)return;
   const now=Date.now();if(now<hintCD)return;
+  breakCombo();updCombo();
   if(hintLvl===0){
     snd('hint');hintLvl=1;hintTarget=carryT;
     hintCluster=new Set([carryT]);
@@ -875,10 +949,12 @@ function finish(){
   snd('done');score+=Math.max(0,1000-elapsed*2);
   document.getElementById('finalScore').textContent=score;
   const m=Math.floor(elapsed/60),s=elapsed%60;
-  document.getElementById('finalStats').innerHTML=`${playable} tiles<br>Time: ${m}:${s.toString().padStart(2,'0')}<br>Moves: ${moves}`;
+  document.getElementById('finalStats').innerHTML=`${playable} tiles<br>Time: ${m}:${s.toString().padStart(2,'0')}<br>Moves: ${moves}<br>Best streak: ${bestStreak}`;
   document.getElementById('completeScreen').classList.remove('hidden');
   document.getElementById('carryBar').classList.remove('visible');
   document.getElementById('hintBtn').classList.add('hidden');
+  exposureActive=false;updExposureBar();
+  document.getElementById('comboDisplay').classList.remove('visible','bounce','shatter');
   hideThumb();clearHL();if(edgeGrp)edgeGrp.visible=false;
 }
 
@@ -906,6 +982,27 @@ el.addEventListener('wheel',e=>{e.preventDefault();camera.fov=Math.max(30,Math.m
 // 13. UI
 // ═══════════════════════════════════════════
 function updHUD(){document.getElementById('scoreDisplay').textContent=score;const m=Math.floor(elapsed/60),s=elapsed%60;document.getElementById('timerDisplay').textContent=m+':'+s.toString().padStart(2,'0');document.getElementById('progressBar').style.width=(playable>0?Math.round(done/playable*100):0)+'%';}
+function updCombo(){
+  const el=document.getElementById('comboDisplay');
+  if(comboStreak>0){el.textContent='\u00d7'+comboMult;el.classList.add('visible');el.classList.remove('shatter');void el.offsetWidth;el.classList.add('bounce');setTimeout(()=>el.classList.remove('bounce'),300);}
+  else{el.classList.remove('visible','bounce');}
+}
+function breakCombo(){
+  const el=document.getElementById('comboDisplay');
+  if(comboStreak>0){el.classList.remove('bounce');el.classList.add('shatter');}
+  comboStreak=0;comboMult=1;
+}
+function updExposureBar(){
+  const bar=document.getElementById('exposureBar');
+  const fill=document.getElementById('exposureFill');
+  if(!exposureOn||!exposureActive){bar.classList.remove('visible');return;}
+  bar.classList.add('visible');
+  const pct=Math.max(0,exposureTime/exposureMax*100);
+  fill.style.width=pct+'%';
+  fill.classList.remove('warn','critical');
+  if(pct<30)fill.classList.add('critical');
+  else if(pct<60)fill.classList.add('warn');
+}
 function updInfo(m){document.getElementById('infoBar').textContent=m;}
 function showFlash(t){const e=document.getElementById(t==='correct'?'flashCorrect':'flashWrong');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),300);}
 
@@ -967,6 +1064,13 @@ document.getElementById('particlesBtn').addEventListener('click',e=>{
   ensureParticles();
   if(particleSys)particleSys.visible=particlesOn && !viewInside;
 });
+document.getElementById('exposureBtn').addEventListener('click',e=>{
+  exposureOn=!exposureOn;e.target.classList.toggle('active',exposureOn);
+  if(!exposureOn){exposureActive=false;updExposureBar();}
+});
+document.getElementById('diffGlowBtn').addEventListener('click',e=>{
+  diffGlowOn=!diffGlowOn;e.target.classList.toggle('active',diffGlowOn);
+});
 document.getElementById('uploadSimBtn').addEventListener('click',()=>document.getElementById('fileSim').click());
 document.getElementById('uploadRealityBtn').addEventListener('click',()=>document.getElementById('fileReality').click());
 function ldTex(file,cb){const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const t=new THREE.CanvasTexture(softenPoles(img));t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;cb(t);};img.src=ev.target.result;};r.readAsDataURL(file);}
@@ -977,8 +1081,23 @@ document.getElementById('fileReality').addEventListener('change',e=>{if(!e.targe
 // 14. RENDER
 // ═══════════════════════════════════════════
 const clk=new THREE.Clock();
+let lastAnimTime=0;
 function animate(){
   requestAnimationFrame(animate);const time=clk.getElapsedTime();
+  const dt=time-lastAnimTime;lastAnimTime=time;
+
+  if(exposureOn&&exposureActive&&!viewInside&&(phase==='CARRYING')){
+    exposureTime-=dt;
+    updExposureBar();
+    if(exposureTime<=0){
+      exposureTime=0;exposureActive=false;
+      breakCombo();updCombo();
+      snd('wrong');showFlash('wrong');
+      score=Math.max(0,score-25);updHUD();
+      cancelC();
+      updInfo('Exposure expired \u2014 pulled back');
+    }
+  }
   if(!pDown){lon+=mom.x;lat+=mom.y;lat=Math.max(-85,Math.min(85,lat));mom.x*=.93;mom.y*=.93;if(Math.abs(mom.x)<.001)mom.x=0;if(Math.abs(mom.y)<.001)mom.y=0;}
 
   // Idle auto-rotation: after ~3s of no touches on the outside view, gently drift lon
@@ -1065,7 +1184,9 @@ function animate(){
       } else if(hintLvl===1&&hintCluster&&hintCluster.has(i)&&f.state!=='transformed'){
         const h=.7+.3*Math.sin(time*4);f.mesh.material.color.setRGB(h,h*.9,h*.6);
       } else if(f.state!=='transformed'){
-        f.mesh.material.color.setRGB(1,1,1);
+        if(viewInside&&diffGlowOn&&f.difficulty==='easy')f.mesh.material.color.setRGB(.82,1,.85);
+        else if(viewInside&&diffGlowOn&&f.difficulty==='hard')f.mesh.material.color.setRGB(1,.82,.78);
+        else f.mesh.material.color.setRGB(1,1,1);
       } else {
         const d=viewInside?1:.45;
         f.mesh.material.color.setRGB(d,d,d);
