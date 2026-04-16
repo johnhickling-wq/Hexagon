@@ -141,7 +141,14 @@ function ensureParticles(){
   }
   const g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
-  const m=new THREE.PointsMaterial({color:0xa8d0ff,size:3.2,sizeAttenuation:true,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false});
+  // Generate a soft circular sprite so particles render as dots, not squares.
+  const sc=document.createElement('canvas');sc.width=32;sc.height=32;
+  const sx=sc.getContext('2d');
+  const sg=sx.createRadialGradient(16,16,0,16,16,16);
+  sg.addColorStop(0,'rgba(255,255,255,1)');sg.addColorStop(0.4,'rgba(255,255,255,0.6)');sg.addColorStop(1,'rgba(255,255,255,0)');
+  sx.fillStyle=sg;sx.fillRect(0,0,32,32);
+  const spriteTex=new THREE.CanvasTexture(sc);
+  const m=new THREE.PointsMaterial({map:spriteTex,color:0xa8d0ff,size:4,sizeAttenuation:true,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false});
   particleSys=new THREE.Points(g,m);
   particleSys.visible=false;
   scene.add(particleSys);
@@ -601,7 +608,7 @@ function renderPreview(targetIdx,size){
   for(let i=0;i<fMeshes.length;i++){
     if(i===targetIdx){
       fMeshes[i].visible=true;fMeshes[i].material.map=realityTex;
-      fMeshes[i].material.side=THREE.BackSide; // always render preview from inside
+      fMeshes[i].material.side=THREE.DoubleSide;
       fMeshes[i].material.color.setRGB(1,1,1);fMeshes[i].material.needsUpdate=true;
       fMeshes[i].geometry.setAttribute('uv',new THREE.Float32BufferAttribute(fD[i].uvs.slice(),2));
     }
@@ -640,10 +647,9 @@ function renderPreview(targetIdx,size){
   }
   ctx.putImageData(id,0,0);
 
-  const curSide=viewInside?THREE.BackSide:THREE.FrontSide;
   for(let i=0;i<fMeshes.length;i++){
     fMeshes[i].visible=true;
-    fMeshes[i].material.side=curSide;
+    fMeshes[i].material.side=THREE.DoubleSide;
     applyTile(i);
     fMeshes[i].material.needsUpdate=true;
   }
